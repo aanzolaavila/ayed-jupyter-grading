@@ -8,6 +8,7 @@ RUN <<EOF
   # python3 -m venv venv
   # source venv/bin/activate
   python3 -m pip install pyarmor
+  pyarmor cfg data_files=*
   pyarmor gen -O build grading
   # ls -lh
   # pwd
