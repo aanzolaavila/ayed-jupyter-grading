@@ -12,6 +12,10 @@ import multiprocessing
 import sys
 import os
 import tempfile
+import logging
+from queue import Empty
+
+logger = logging.getLogger(__name__)
 
 
 class Tester(ABC):
@@ -34,7 +38,7 @@ def check_methods(obj: Any, methods: dict[str, tuple[int, int]]) -> bool:
             return False
 
         method = getattr(obj, name)
-        if type(method) != types.FunctionType:
+        if type(method) is types.FunctionType:
             banner(Fore.RED + f"ERROR: '{name}' no es un metodo :melting_face:")
             return False
 
@@ -57,7 +61,7 @@ async def async_main(function, timeout: int | float):
     banner(
         Fore.CYAN
         + "[RUNTIME ERROR]"
-        + Fore.YELLOW
+        + Fore.MAGENTA
         + " - Su codigo saco una excepcion: "
         + Fore.LIGHTBLACK_EX
         + f"{e}"
@@ -65,7 +69,7 @@ async def async_main(function, timeout: int | float):
     banner(
         Fore.RED
         + "[TIME LIMIT]"
-        + Fore.YELLOW
+        + Fore.MAGENTA
         + f" - su codigo llego al tiempo permitido ({timeout}s)"
     )
     raise
@@ -120,11 +124,13 @@ class ExamGrader(Tester):
         #         + f"Debe proveer la funcion del problema a tratar"
         #     )
         #     return
-        print(type(obj))
+        logger.debug("Type object", extra={"type": type(obj)})
 
         main: Callable = obj
 
-        def main_wrapper(infile: TextIO, outfile: TextIO):
+        def main_wrapper(
+            infile: TextIO, outfile: TextIO, exceptionQueue: multiprocessing.Queue
+        ):
             sys.stdin = infile
 
             def custom_input(prompt: str = "") -> str:
@@ -136,8 +142,8 @@ class ExamGrader(Tester):
                 with contextlib.redirect_stdout(outfile):
                     main(infile, custom_input)
                     sys.stdout.flush()
-            except Exception:
-                pass
+            except Exception as e:
+                exceptionQueue.put(e)
 
         # self.setup_tests(obj)
 
@@ -147,14 +153,17 @@ class ExamGrader(Tester):
 
         testcases = [f[:-3] for f in os.listdir(problem_dir) if f.endswith(".in")]
 
-        print("Problem", self.problem)
+        banner(Fore.LIGHTBLACK_EX + f"Problema {self.problem}" + Fore.BLACK)
         times = []
         for case in testcases:
+            banner(Fore.LIGHTBLACK_EX + f"Ejecutando caso {case}" + Fore.BLACK)
+
             infile = open(f"{problem_dir}/{case}.in")
             outcapture = tempfile.NamedTemporaryFile(mode="w", delete=False)
+            exceptionQueue = multiprocessing.Queue()
             p = multiprocessing.Process(
                 target=main_wrapper,
-                args=(infile, outcapture),
+                args=(infile, outcapture, exceptionQueue),
                 name=(f"{self.problem}_{case}"),
             )
             p.start()
@@ -174,9 +183,27 @@ class ExamGrader(Tester):
                 banner(
                     Fore.BLUE
                     + "[TIME LIMIT]"
-                    + Fore.YELLOW
-                    + f" - su codigo llego al tiempo limite permitido ({self.timeout:.2f}s)"
+                    + Fore.MAGENTA
+                    + f" - su programa llego al tiempo límite permitido ({self.timeout:.2f}s)"
                     + Fore.BLACK
+                )
+                return
+
+            exception: Exception | None = None
+            try:
+                exception = exceptionQueue.get_nowait()
+            except Empty:
+                pass
+            exceptionQueue.close()
+            if exception:
+                logger.debug("got exception: %s", exception)
+                banner(
+                    Fore.CYAN
+                    + "[RUNTIME ERROR]"
+                    + Fore.MAGENTA
+                    + " - Su programa lanzó una excepción: "
+                    + Fore.LIGHTBLACK_EX
+                    + f"{exception}"
                 )
                 return
 
@@ -186,14 +213,26 @@ class ExamGrader(Tester):
             with open(outcapture.name, "r") as outfile:
                 got_out = outfile.readlines()
 
-            print(expected_out, got_out)  # TODO: remove
+            logger.debug(
+                "Program output expected: %s vs got: %s", expected_out, got_out
+            )
 
             equal = compare_outputs(expected_out, got_out)
             if not equal:
                 banner(Fore.RED + "[WRONG ANSWER]" + Fore.BLACK + f" ({delta:.2f}s)")
                 return
 
-        banner(Fore.GREEN + "[ACCEPTED]" + Fore.BLACK + f" ({sum(times):.2f}s)")
+            banner(
+                Fore.LIGHTBLACK_EX + f"Terminado caso {case}: {delta:.2f}s" + Fore.BLACK
+            )
+
+        banner(
+            Fore.GREEN
+            + "[ACCEPTED]"
+            + Fore.LIGHTBLACK_EX
+            + f" ({sum(times):.2f}s/{self.timeout}s)"
+            + Fore.BLACK
+        )
 
         # self.execute_test()
 
@@ -209,15 +248,20 @@ def compare_outputs(expected_lines: list[str], got_lines: list[str]) -> bool:
     got_map = map(clean_str, got_lines)
     for expected, got in zip(expected_map, got_map):
         if expected != got:
-            print(f"{expected} != {got}")  # TODO: remove
+            logger.debug("Got differences expected: %s vs got: %s", expected, got)
+
             return False
     return True
 
 
 class Grader(Checker):
-    def __init__(self, name: str, code: int) -> None:
+    def __init__(self, name: str, code: int, debug: bool = False) -> None:
         super().__init__(name, code)
         self.testers: dict[str, Tester] = self.get_testers()
+        if debug:
+            logger.setLevel(logging.DEBUG)
+        else:
+            logger.setLevel(logging.CRITICAL)
 
     def get_testers(self) -> dict[str, Tester]:
         return {
