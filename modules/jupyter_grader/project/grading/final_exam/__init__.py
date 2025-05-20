@@ -222,9 +222,9 @@ class Grader(Checker):
     def get_testers(self) -> dict[str, Tester]:
         return {
             "example": ExamGrader("example", 1.0),
-            "A": ExamGrader("A", 3.0),
-            "B": ExamGrader("B", 3.0),
-            "C": ExamGrader("C", 3.0),
+            "A": ExamGrader("A", 2.0),
+            "B": ExamGrader("B", 2.0),
+            "C": ExamGrader("C", 5.0),
         }
 
     def grade(self, part: str, answer: Any):
